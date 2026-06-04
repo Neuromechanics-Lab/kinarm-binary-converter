@@ -1,6 +1,6 @@
 # kinarm-binary-converter
 
-A standalone C++ command-line tool that converts `.kinarm` files (Dexterit-E ZIP archives from KINARM exoskeleton robots) to open formats — **no MATLAB required**.
+A standalone command-line tool that converts `.kinarm` files (Dexterit-E ZIP archives from KINARM exoskeleton robots) to open formats — **no MATLAB required**.
 
 ## Why
 
@@ -15,6 +15,26 @@ This tool replaces that step entirely. It reads the `.kinarm` binary format dire
 
 ---
 
+## Download
+
+Pre-compiled binaries — no build tools needed:
+
+| Platform | Download |
+|----------|----------|
+| macOS (Apple Silicon) | [kinarm-binary-converter-macos-arm64](https://github.com/Neuromechanics-Lab/kinarm-binary-converter/releases/latest/download/kinarm-binary-converter-macos-arm64) |
+| Windows x64 | [kinarm-binary-converter-win64.exe](https://github.com/Neuromechanics-Lab/kinarm-binary-converter/releases/latest/download/kinarm-binary-converter-win64.exe) |
+| Linux x86_64 | [kinarm-binary-converter-linux-x86_64](https://github.com/Neuromechanics-Lab/kinarm-binary-converter/releases/latest/download/kinarm-binary-converter-linux-x86_64) |
+
+Or browse all releases: [GitHub Releases](https://github.com/Neuromechanics-Lab/kinarm-binary-converter/releases)
+
+**macOS note:** after downloading, you may need to allow the binary in System Settings → Privacy & Security, or run:
+```bash
+xattr -d com.apple.quarantine kinarm-binary-converter-macos-arm64
+chmod +x kinarm-binary-converter-macos-arm64
+```
+
+---
+
 ## Output Formats
 
 | Format | File | Use case |
@@ -25,9 +45,13 @@ This tool replaces that step entirely. It reads the `.kinarm` binary format dire
 
 The `.mat` output uses the same field names as the official KINARM Analysis Scripts (`data.c3d(i).Right_HandX`, `data.c3d(i).ANALOG.RATE`, etc.) so it works with any existing MATLAB code that calls `exam_load()`.
 
+All 41 channels are included in every format: hand position, joint angles/velocities/accelerations, motor torques, force sensor data, and EMG.
+
 ---
 
 ## Usage
+
+### Terminal / command line
 
 ```bash
 kinarm-binary-converter <input.kinarm> <output_stem> [--formats json,csv,mat]
@@ -48,11 +72,50 @@ kinarm-binary-converter subject01_task.kinarm results/subject01
 # JSON + CSV only
 kinarm-binary-converter subject01_task.kinarm results/subject01 --formats json,csv
 
-# Batch convert a folder (shell loop)
+# Batch convert a folder
 for f in data/*.kinarm; do
   stem="converted/$(basename "${f%.kinarm}")"
   kinarm-binary-converter "$f" "$stem"
 done
+```
+
+### From R
+
+```r
+system2("kinarm-binary-converter",
+        args = c("subject01.kinarm", "output/subject01"),
+        stdout = TRUE, stderr = TRUE)
+
+df <- read.csv("output/subject01_timeseries.csv")
+hold <- subset(df, in_home_window == 1)
+```
+
+### From Python
+
+```python
+import subprocess, json
+
+subprocess.run(["kinarm-binary-converter", "subject01.kinarm", "output/subject01"])
+
+with open("output/subject01.json") as f:
+    data = json.load(f)
+```
+
+### From MATLAB
+
+```matlab
+% Convert the file
+system('kinarm-binary-converter subject01.kinarm output/subject01');
+
+% Load the .mat result — same struct as exam_load()
+load('output/subject01.mat');   % loads variable 'data'
+data.c3d(1).Right_HandX        % hand X position, trial 1 (m)
+data.c3d(1).ANALOG.RATE        % sample rate (Hz)
+data.c3d(1).EVENTS             % event names and times
+
+% Or load the CSV
+T = readtable('output/subject01_timeseries.csv');
+hold_data = T(T.in_home_window == 1, :);
 ```
 
 ---
@@ -97,7 +160,14 @@ The converter auto-detects file type from the `protocol` field in the exam info:
       ],
       "hand_full": {"time_s": [...], "x": [...], "y": [...]},
       "hand_home": {"time_s": [...], "x": [...], "y": [...]},
-      "vel_home":  {"vx": [...], "vy": [...]}
+      "vel_home":  {"vx": [...], "vy": [...]},
+      "channels": {
+        "Right_HandX": [...],
+        "Right_HandY": [...],
+        "Right_L1Ang": [...],
+        "bicep": [...],
+        "..."
+      }
     }
   ]
 }
@@ -107,122 +177,69 @@ The converter auto-detects file type from the `protocol` field in the exam info:
 
 ## CSV Structure
 
-One row per sample across all trials. Columns:
+One row per sample across all trials. Fixed columns followed by one column per channel:
 
 ```
-trial_id, block, trial, repeat, time_s, x, y, vx, vy, in_home_window
+trial_id, block, trial, repeat, time_s, in_home_window, Right_HandX, Right_HandY, Right_L1Ang, ...
 ```
 
-- `x`, `y` — hand position in meters (global coordinate system)
-- `vx`, `vy` — hand velocity in m/s (empty if not recorded)
 - `in_home_window` — 1 if sample falls within the home-hold window, 0 otherwise
-
-Read in Python:
-```python
-import pandas as pd
-df = pd.read_csv("subject01_timeseries.csv")
-hold = df[df["in_home_window"] == 1]
-```
-
-Read in R:
-```r
-df <- read.csv("subject01_timeseries.csv")
-hold <- subset(df, in_home_window == 1)
-```
-
-Read in MATLAB:
-```matlab
-T = readtable('subject01_timeseries.csv');
-hold_data = T(T.in_home_window == 1, :);
-```
+- All 41 channels present as numeric columns
+- Empty cells where a channel was not recorded for that trial
 
 ---
 
 ## MAT Structure
 
-The `.mat` file uses MATLAB v5 format (compatible with all MATLAB versions and `scipy.io.loadmat`). The struct layout mirrors `exam_load()` from the official KINARM Analysis Scripts:
+MATLAB v5 format, compatible with all MATLAB versions and `scipy.io.loadmat`. Struct layout mirrors `exam_load()` from the official KINARM Analysis Scripts:
 
 ```matlab
-% In MATLAB:
-load('subject01.mat');         % loads variable 'data'
-data.c3d(1).Right_HandX       % right hand X position, trial 1 (m)
-data.c3d(1).Right_HandY       % right hand Y position, trial 1 (m)
-data.c3d(1).Right_L1Ang       % shoulder joint angle, trial 1 (rad)
-data.c3d(1).Right_L2Ang       % elbow joint angle, trial 1 (rad)
-data.c3d(1).ANALOG.RATE       % sample rate (Hz)
-data.c3d(1).EVENTS            % event names and times
-data.filename                 % source .kinarm filename
+load('subject01.mat');              % loads variable 'data'
+data.c3d(1).Right_HandX            % right hand X position, trial 1 (m)
+data.c3d(1).Right_HandY            % right hand Y position, trial 1 (m)
+data.c3d(1).Right_L1Ang            % shoulder joint angle (rad)
+data.c3d(1).Right_L2Ang            % elbow joint angle (rad)
+data.c3d(1).Right_FS_ForceX        % force sensor X (N)
+data.c3d(1).bicep                  % EMG — bicep
+data.c3d(1).ANALOG.RATE            % sample rate (Hz)
+data.c3d(1).EVENTS.LABELS          % event name strings (cell array)
+data.c3d(1).EVENTS.TIMES           % event timestamps (s)
+data.filename                      % source .kinarm filename
 ```
 
-In Python with scipy:
+In Python:
 ```python
 import scipy.io
 mat = scipy.io.loadmat("subject01.mat", squeeze_me=True)
-trial1 = mat["data"]["c3d"][0]
+trial1 = mat["data"]["c3d"].item()[0]
 x = trial1["Right_HandX"]
 ```
 
 ---
 
-## Build
+## Advanced
 
-### Prerequisites
-- CMake 3.14+
-- C++17 compiler (GCC, Clang, MSVC)
-- No other dependencies — ZIP reading uses bundled [miniz](https://github.com/richgel999/miniz)
+### Building from source
 
-### macOS / Linux
+Only needed if you want to modify the converter or build for an unsupported platform.
+
+**Prerequisites:** CMake 3.14+, C++17 compiler (GCC, Clang, or MSVC). No other dependencies — ZIP reading uses bundled [miniz](https://github.com/richgel999/miniz).
+
+**macOS / Linux:**
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ./build/kinarm-binary-converter --help
 ```
 
-### Windows (MSVC)
+**Windows (MSVC):**
 ```cmd
 cmake -S . -B build
 cmake --build build --config Release
 .\build\Release\kinarm-binary-converter.exe --help
 ```
 
-### Pre-compiled binaries
-
-Pre-compiled binaries for macOS (arm64, x86_64) and Windows x64 are available on the [Releases](https://gitlab.com/neurotrophy-git/kinarm-binary-converter/-/releases) page.
-
----
-
-## Integration
-
-### Use from R (no shell required)
-```r
-system2("kinarm-binary-converter",
-        args = c("subject01.kinarm", "output/subject01"),
-        stdout = TRUE, stderr = TRUE)
-df <- read.csv("output/subject01_timeseries.csv")
-```
-
-### Use from Python
-```python
-import subprocess, json
-subprocess.run(["kinarm-binary-converter", "subject01.kinarm", "output/subject01"])
-with open("output/subject01.json") as f:
-    data = json.load(f)
-```
-
-### Batch pipeline (bash)
-```bash
-#!/bin/bash
-mkdir -p converted
-for f in raw/*.kinarm; do
-  name=$(basename "${f%.kinarm}")
-  kinarm-binary-converter "$f" "converted/$name" --formats json,csv
-  echo "Converted: $name"
-done
-```
-
----
-
-## What's in a `.kinarm` file
+### What's in a `.kinarm` file
 
 A `.kinarm` file is a ZIP archive containing per-trial binary data in Dexterit-E format:
 
@@ -234,7 +251,6 @@ raw/
     Right_L1Ang.kinematics     # Shoulder joint angle (float32, ~1 kHz)
     Right_L2Ang.kinematics     # Elbow joint angle
     Right_HandXVel.kinematics  # Hand velocity X (if recorded)
-    Right_HandYVel.kinematics  # Hand velocity Y (if recorded)
     Right_FS_ForceX.kinematics # Force sensor X (if present)
     examevents.bin             # Event names + timestamps (UTF-16LE + float32)
     ...
