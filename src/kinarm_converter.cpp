@@ -368,14 +368,8 @@ struct TrialData {
     std::string trial_id;
     int block = 0, trial = 0, repeat = 0;
     int sample_rate = 1000;
-    bool home_valid = false;
-    double home_start_s = 0.0;
-    double home_end_s = 0.0;
     std::vector<Event> events;
-
     std::vector<float> full_t, full_x, full_y;
-    std::vector<float> home_t, home_x, home_y;
-    std::vector<float> home_vx, home_vy;
     bool has_vel = false;
 };
 
@@ -761,14 +755,8 @@ int main(int argc, char** argv) {
     std::string vx_file  = arm_cap + "_HandXVel.kinematics";
     std::string vy_file  = arm_cap + "_HandYVel.kinematics";
 
-    // Detect calibration mode: protocol field contains "calibration".
-    std::string protocol_lower = protocol;
-    for (auto& c : protocol_lower) c = (char)std::tolower((unsigned char)c);
-    bool is_calibration = (protocol_lower.find("calibration") != std::string::npos);
-    std::string protocol_mode = is_calibration ? "calibration" : "task";
-
-    std::fprintf(stderr, "[info] subject=%s protocol=%s mode=%s arm=%s\n",
-                 subject_id.c_str(), protocol.c_str(), protocol_mode.c_str(), arm.c_str());
+    std::fprintf(stderr, "[info] subject=%s protocol=%s arm=%s\n",
+                 subject_id.c_str(), protocol.c_str(), arm.c_str());
 
     // ---- trials ------------------------------------------------------------
     auto trial_ids = extract_trial_ids(zf);
@@ -796,33 +784,7 @@ int main(int argc, char** argv) {
         auto ev_data = zf.read(base + "examevents.bin");
         if (!ev_data.empty()) td.events = parse_examevents(ev_data);
 
-        // home window depends on protocol mode (see existing logic).
-        bool have_t2_onset = false, have_in2 = false, have_wc = false;
-        double t2_onset = 0.0, in2_first = 0.0, wc_last = 0.0;
-        for (const auto& e : td.events) {
-            if (e.name == "TARGET2_ONSET" && !have_t2_onset) {
-                t2_onset = e.time_s; have_t2_onset = true;
-            } else if (e.name == "IN_TARGET2" && !have_in2) {
-                in2_first = e.time_s; have_in2 = true;
-            } else if (e.name == "WAIT_CORRECT") {
-                wc_last = e.time_s; have_wc = true;
-            }
-        }
-        if (is_calibration) {
-            td.home_valid = have_t2_onset;
-            if (td.home_valid) {
-                td.home_start_s = t2_onset;
-                td.home_end_s   = 1e99; // sentinel: replaced with last sample time below
-            }
-        } else {
-            td.home_valid = have_in2 && have_wc;
-            if (td.home_valid) {
-                td.home_start_s = in2_first;
-                td.home_end_s   = wc_last;
-            }
-        }
-
-        // position (primary hand, used by JSON/CSV windowing)
+        // position (primary hand — used for time axis and full_x/full_y)
         auto pos_data = zf.read(base + pos_file);
         XYSeries pos = parse_position(pos_data);
         td.full_x = pos.x;
@@ -832,44 +794,18 @@ int main(int argc, char** argv) {
             td.full_t.push_back((float)((double)i / (double)td.sample_rate));
         }
 
-        if (is_calibration && td.home_valid && td.home_end_s > 1e90) {
-            td.home_end_s = td.full_t.empty() ? td.home_start_s
-                                               : (double)td.full_t.back();
-        }
-
         // velocity (optional)
-        std::vector<float> vx_all, vy_all;
         if (zf.has(base + vx_file) && zf.has(base + vy_file)) {
-            vx_all = parse_kinematics(zf.read(base + vx_file));
-            vy_all = parse_kinematics(zf.read(base + vy_file));
-            td.has_vel = !vx_all.empty() && !vy_all.empty();
+            auto vx = parse_kinematics(zf.read(base + vx_file));
+            auto vy = parse_kinematics(zf.read(base + vy_file));
+            td.has_vel = !vx.empty() && !vy.empty();
         }
 
-        // home-windowed slices
-        if (td.home_valid) {
-            for (size_t i = 0; i < td.full_t.size(); ++i) {
-                double ts = td.full_t[i];
-                if (ts >= td.home_start_s && ts <= td.home_end_s) {
-                    td.home_t.push_back(td.full_t[i]);
-                    td.home_x.push_back(td.full_x[i]);
-                    td.home_y.push_back(td.full_y[i]);
-                    if (td.has_vel && i < vx_all.size() && i < vy_all.size()) {
-                        td.home_vx.push_back(vx_all[i]);
-                        td.home_vy.push_back(vy_all[i]);
-                    }
-                }
-            }
-        }
+        // ALL channels (for MAT and full CSV/JSON output)
+        read_all_channels_for_trial(zf, tid, ti, trial_ids.size(), all_channels);
 
-        // ALL channels for this trial (for the MAT output).
-        if (want_mat) {
-            read_all_channels_for_trial(zf, tid, ti, trial_ids.size(), all_channels);
-        }
-
-        std::fprintf(stderr,
-            "[info] trial %s: %zu samples, home_valid=%d, home=[%.4f,%.4f], home_samples=%zu\n",
-            tid.c_str(), td.full_t.size(), (int)td.home_valid,
-            td.home_start_s, td.home_end_s, td.home_t.size());
+        std::fprintf(stderr, "[info] trial %s: %zu samples, %zu events\n",
+            tid.c_str(), td.full_t.size(), td.events.size());
 
         trials.push_back(std::move(td));
     }
@@ -888,7 +824,7 @@ int main(int argc, char** argv) {
         std::sort(csv_chans.begin(), csv_chans.end());
 
         // Header: fixed columns + one column per channel
-        f << "trial_id,block,trial,repeat,time_s,in_home_window";
+        f << "trial_id,block,trial,repeat,time_s";
         for (const auto& ch : csv_chans) f << ',' << ch;
         f << '\n';
 
@@ -897,10 +833,8 @@ int main(int argc, char** argv) {
             const auto& t = trials[ti];
             for (size_t i = 0; i < t.full_t.size(); ++i) {
                 double ts = t.full_t[i];
-                int in_home = (t.home_valid && ts >= t.home_start_s && ts <= t.home_end_s) ? 1 : 0;
                 f << t.trial_id << ',' << t.block << ',' << t.trial << ',' << t.repeat << ',';
-                std::snprintf(nb, sizeof(nb), "%.6g", ts); f << nb << ',';
-                f << in_home;
+                std::snprintf(nb, sizeof(nb), "%.6g", ts); f << nb;
                 // All channels in sorted order
                 for (const auto& ch : csv_chans) {
                     f << ',';
@@ -909,7 +843,6 @@ int main(int argc, char** argv) {
                         std::snprintf(nb, sizeof(nb), "%.8g", (double)per_trial[ti][i]);
                         f << nb;
                     }
-                    // else: empty cell
                 }
                 f << '\n';
             }
@@ -933,8 +866,7 @@ int main(int argc, char** argv) {
         f << "\"robot_arm\":\""  << json_escape(robot_arm)  << "\",";
         f << "\"operator\":\""   << json_escape(operatorv)  << "\",";
         f << "\"posture\":\""    << json_escape(posture)    << "\",";
-        f << "\"robotver\":\""      << json_escape(robotver)      << "\",";
-        f << "\"protocol_mode\":\"" << json_escape(protocol_mode) << "\"";
+        f << "\"robotver\":\"" << json_escape(robotver) << "\"";
         f << "},\n";
 
         f << "  \"trials\": [\n";
@@ -946,17 +878,6 @@ int main(int argc, char** argv) {
             f << "      \"block\": " << t.block << ", \"trial\": " << t.trial
               << ", \"repeat\": " << t.repeat << ",\n";
             f << "      \"sample_rate\": " << t.sample_rate << ",\n";
-            if (t.home_valid) {
-                std::snprintf(nb, sizeof(nb), "%.6g", t.home_start_s);
-                f << "      \"home_start_s\": " << nb << ",\n";
-                std::snprintf(nb, sizeof(nb), "%.6g", t.home_end_s);
-                f << "      \"home_end_s\": " << nb << ",\n";
-            } else {
-                f << "      \"home_start_s\": null,\n";
-                f << "      \"home_end_s\": null,\n";
-            }
-            f << "      \"home_valid\": " << (t.home_valid ? "true" : "false") << ",\n";
-
             f << "      \"events\": [";
             for (size_t ei = 0; ei < t.events.size(); ++ei) {
                 if (ei) f << ", ";
@@ -966,16 +887,7 @@ int main(int argc, char** argv) {
             }
             f << "],\n";
 
-            f << "      \"hand_full\": {\"time_s\":" << floats_to_json(t.full_t)
-              << ",\"x\":" << floats_to_json(t.full_x)
-              << ",\"y\":" << floats_to_json(t.full_y) << "},\n";
-
-            f << "      \"hand_home\": {\"time_s\":" << floats_to_json(t.home_t)
-              << ",\"x\":" << floats_to_json(t.home_x)
-              << ",\"y\":" << floats_to_json(t.home_y) << "},\n";
-
-            f << "      \"vel_home\": {\"vx\":" << floats_to_json(t.home_vx)
-              << ",\"vy\":" << floats_to_json(t.home_vy) << "},\n";
+            f << "      \"time_s\":" << floats_to_json(t.full_t) << ",\n";
 
             // All channels as named arrays (same data as the .mat file)
             f << "      \"channels\": {";
