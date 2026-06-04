@@ -882,26 +882,36 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "[error] cannot write CSV: %s\n", csv_path.c_str());
             return 1;
         }
-        f << "trial_id,block,trial,repeat,time_s,x,y,vx,vy,in_home_window\n";
+        // Build sorted channel list for consistent column order
+        std::vector<std::string> csv_chans;
+        for (const auto& kv : all_channels) csv_chans.push_back(kv.first);
+        std::sort(csv_chans.begin(), csv_chans.end());
+
+        // Header: fixed columns + one column per channel
+        f << "trial_id,block,trial,repeat,time_s,in_home_window";
+        for (const auto& ch : csv_chans) f << ',' << ch;
+        f << '\n';
+
         char nb[64];
-        for (const auto& t : trials) {
-            size_t home_cursor = 0;
+        for (size_t ti = 0; ti < trials.size(); ++ti) {
+            const auto& t = trials[ti];
             for (size_t i = 0; i < t.full_t.size(); ++i) {
                 double ts = t.full_t[i];
                 int in_home = (t.home_valid && ts >= t.home_start_s && ts <= t.home_end_s) ? 1 : 0;
                 f << t.trial_id << ',' << t.block << ',' << t.trial << ',' << t.repeat << ',';
                 std::snprintf(nb, sizeof(nb), "%.6g", ts); f << nb << ',';
-                std::snprintf(nb, sizeof(nb), "%.8g", (double)t.full_x[i]); f << nb << ',';
-                std::snprintf(nb, sizeof(nb), "%.8g", (double)t.full_y[i]); f << nb << ',';
-                if (in_home && t.has_vel &&
-                    home_cursor < t.home_vx.size() && home_cursor < t.home_vy.size()) {
-                    std::snprintf(nb, sizeof(nb), "%.8g", (double)t.home_vx[home_cursor]); f << nb << ',';
-                    std::snprintf(nb, sizeof(nb), "%.8g", (double)t.home_vy[home_cursor]); f << nb << ',';
-                } else {
-                    f << ',' << ',';
+                f << in_home;
+                // All channels in sorted order
+                for (const auto& ch : csv_chans) {
+                    f << ',';
+                    const auto& per_trial = all_channels.at(ch);
+                    if (ti < per_trial.size() && i < per_trial[ti].size()) {
+                        std::snprintf(nb, sizeof(nb), "%.8g", (double)per_trial[ti][i]);
+                        f << nb;
+                    }
+                    // else: empty cell
                 }
-                if (in_home) home_cursor++;
-                f << in_home << '\n';
+                f << '\n';
             }
         }
         std::fprintf(stderr, "[info] wrote %s\n", csv_path.c_str());
@@ -965,7 +975,22 @@ int main(int argc, char** argv) {
               << ",\"y\":" << floats_to_json(t.home_y) << "},\n";
 
             f << "      \"vel_home\": {\"vx\":" << floats_to_json(t.home_vx)
-              << ",\"vy\":" << floats_to_json(t.home_vy) << "}\n";
+              << ",\"vy\":" << floats_to_json(t.home_vy) << "},\n";
+
+            // All channels as named arrays (same data as the .mat file)
+            f << "      \"channels\": {";
+            bool first_ch = true;
+            for (const auto& kv : all_channels) {
+                if (!first_ch) f << ",";
+                first_ch = false;
+                f << "\"" << json_escape(kv.first) << "\":";
+                if (ti < kv.second.size()) {
+                    f << floats_to_json(kv.second[ti]);
+                } else {
+                    f << "[]";
+                }
+            }
+            f << "}\n";
 
             f << "    }" << (ti + 1 < trials.size() ? "," : "") << "\n";
         }

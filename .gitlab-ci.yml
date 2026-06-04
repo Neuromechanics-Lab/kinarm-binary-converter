@@ -1,0 +1,155 @@
+stages:
+  - build
+  - release
+
+variables:
+  GIT_DEPTH: 1
+
+# ── macOS arm64 (GitLab-hosted macOS runner) ──────────────────────────────────
+build:macos-arm64:
+  stage: build
+  tags:
+    - macos
+    - arm64
+  script:
+    - cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+    - cmake --build build
+    - mkdir -p bin
+    - cp build/kinarm-binary-converter bin/kinarm-binary-converter-macos-arm64
+    - chmod +x bin/kinarm-binary-converter-macos-arm64
+    - ./bin/kinarm-binary-converter-macos-arm64 --help 2>&1 || true
+  artifacts:
+    name: "kinarm-binary-converter-macos-arm64-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - bin/kinarm-binary-converter-macos-arm64
+    expire_in: 90 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+# ── macOS x86_64 ─────────────────────────────────────────────────────────────
+build:macos-x86_64:
+  stage: build
+  tags:
+    - macos
+    - x86_64
+  script:
+    - cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+    - cmake --build build
+    - mkdir -p bin
+    - cp build/kinarm-binary-converter bin/kinarm-binary-converter-macos-x86_64
+    - chmod +x bin/kinarm-binary-converter-macos-x86_64
+  artifacts:
+    name: "kinarm-binary-converter-macos-x86_64-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - bin/kinarm-binary-converter-macos-x86_64
+    expire_in: 90 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+  allow_failure: true  # optional until a macOS x86 runner is registered
+
+# ── Windows x64 (GitLab-hosted Windows runner) ───────────────────────────────
+build:windows-x64:
+  stage: build
+  tags:
+    - windows
+    - x64
+  script:
+    - cmake -S . -B build
+    - cmake --build build --config Release
+    - mkdir -Force bin
+    - copy build\Release\kinarm-binary-converter.exe bin\kinarm-binary-converter-win64.exe
+  artifacts:
+    name: "kinarm-binary-converter-win64-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - bin/kinarm-binary-converter-win64.exe
+    expire_in: 90 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+  allow_failure: true  # optional until a Windows runner is registered
+
+# ── Linux x86_64 (GitLab shared runner) ──────────────────────────────────────
+build:linux-x86_64:
+  stage: build
+  image: ubuntu:22.04
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq cmake g++ make
+  script:
+    - cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+    - cmake --build build
+    - mkdir -p bin
+    - cp build/kinarm-binary-converter bin/kinarm-binary-converter-linux-x86_64
+    - chmod +x bin/kinarm-binary-converter-linux-x86_64
+    - ./bin/kinarm-binary-converter-linux-x86_64 --help 2>&1 || true
+  artifacts:
+    name: "kinarm-binary-converter-linux-x86_64-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - bin/kinarm-binary-converter-linux-x86_64
+    expire_in: 90 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+# ── Release: attach all binaries when a version tag is pushed ─────────────────
+# Tag format: v1.0.0
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: build:linux-x86_64
+      artifacts: true
+    - job: build:macos-arm64
+      artifacts: true
+      optional: true
+    - job: build:macos-x86_64
+      artifacts: true
+      optional: true
+    - job: build:windows-x64
+      artifacts: true
+      optional: true
+  script:
+    - echo "Creating release for $CI_COMMIT_TAG"
+  release:
+    name: "kinarm-binary-converter $CI_COMMIT_TAG"
+    description: |
+      ## kinarm-binary-converter $CI_COMMIT_TAG
+
+      Converts `.kinarm` files to JSON, CSV, and MATLAB `.mat` format without MATLAB.
+
+      ### Download
+
+      Pick the binary for your platform:
+
+      | Platform | File |
+      |----------|------|
+      | macOS (Apple Silicon) | `kinarm-binary-converter-macos-arm64` |
+      | macOS (Intel) | `kinarm-binary-converter-macos-x86_64` |
+      | Windows x64 | `kinarm-binary-converter-win64.exe` |
+      | Linux x86_64 | `kinarm-binary-converter-linux-x86_64` |
+
+      ### Usage
+
+      ```bash
+      kinarm-binary-converter subject01.kinarm output/subject01
+      ```
+
+      See [README](https://gitlab.com/neurotrophy-git/kinarm-binary-converter/-/blob/main/README.md) for full documentation.
+    tag_name: $CI_COMMIT_TAG
+    assets:
+      links:
+        - name: "kinarm-binary-converter-linux-x86_64"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/kinarm-binary-converter-linux-x86_64?job=build:linux-x86_64"
+          link_type: package
+        - name: "kinarm-binary-converter-macos-arm64"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/kinarm-binary-converter-macos-arm64?job=build:macos-arm64"
+          link_type: package
+        - name: "kinarm-binary-converter-macos-x86_64"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/kinarm-binary-converter-macos-x86_64?job=build:macos-x86_64"
+          link_type: package
+        - name: "kinarm-binary-converter-win64.exe"
+          url: "${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_TAG}/raw/bin/kinarm-binary-converter-win64.exe?job=build:windows-x64"
+          link_type: package
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
