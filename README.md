@@ -87,7 +87,7 @@ system2("kinarm-binary-converter",
         stdout = TRUE, stderr = TRUE)
 
 df <- read.csv("output/subject01_timeseries.csv")
-hold <- subset(df, in_home_window == 1)
+head(df)
 ```
 
 ### From Python
@@ -115,19 +115,8 @@ data.c3d(1).EVENTS             % event names and times
 
 % Or load the CSV
 T = readtable('output/subject01_timeseries.csv');
-hold_data = T(T.in_home_window == 1, :);
+disp(T(1:5, :));
 ```
-
----
-
-## Protocol Detection
-
-The converter auto-detects file type from the `protocol` field in the exam info:
-
-- **Calibration** (protocol name contains "calibration"): home window = `TARGET2_ONSET` → end of trial. The participant holds at the nearest target for the full trial duration.
-- **Task** (all other protocols): home window = `IN_TARGET2` → last `WAIT_CORRECT`. Captures the pre-reach home-hold dwell period.
-
-`home_valid` is set to `false` and `home_start_s`/`home_end_s` are null if the required events are absent.
 
 ---
 
@@ -138,7 +127,6 @@ The converter auto-detects file type from the `protocol` field in the exam info:
   "metadata": {
     "subject_id": "P001",
     "protocol": "Visually Guided Reaching",
-    "protocol_mode": "task",
     "dex_ver": "3.9.2",
     "robot_arm": "right",
     "operator": "...",
@@ -150,22 +138,20 @@ The converter auto-detects file type from the `protocol` field in the exam info:
       "trial_id": "02_01_01",
       "block": 2, "trial": 1, "repeat": 1,
       "sample_rate": 1000,
-      "home_start_s": 2.94,
-      "home_end_s": 5.61,
-      "home_valid": true,
+      "time_s": [0.0, 0.001, 0.002, "..."],
       "events": [
         {"name": "TARGET1_ONSET", "time_s": 0.001},
+        {"name": "TARGET2_ONSET", "time_s": 2.966},
         {"name": "IN_TARGET2",    "time_s": 2.94},
         {"name": "WAIT_CORRECT",  "time_s": 5.61}
       ],
-      "hand_full": {"time_s": [...], "x": [...], "y": [...]},
-      "hand_home": {"time_s": [...], "x": [...], "y": [...]},
-      "vel_home":  {"vx": [...], "vy": [...]},
       "channels": {
-        "Right_HandX": [...],
-        "Right_HandY": [...],
-        "Right_L1Ang": [...],
-        "bicep": [...],
+        "Right_HandX":     [0.017, 0.017, "..."],
+        "Right_HandY":     [0.119, 0.119, "..."],
+        "Right_L1Ang":     ["..."],
+        "Right_L2Ang":     ["..."],
+        "Right_FS_ForceX": ["..."],
+        "bicep":           ["..."],
         "..."
       }
     }
@@ -180,10 +166,10 @@ The converter auto-detects file type from the `protocol` field in the exam info:
 One row per sample across all trials. Fixed columns followed by one column per channel:
 
 ```
-trial_id, block, trial, repeat, time_s, in_home_window, Right_HandX, Right_HandY, Right_L1Ang, ...
+trial_id, block, trial, repeat, time_s, Right_HandX, Right_HandY, Right_L1Ang, ...
 ```
 
-- `in_home_window` — 1 if sample falls within the home-hold window, 0 otherwise
+- One row per sample across all trials (concatenated in trial order)
 - All 41 channels present as numeric columns
 - Empty cells where a channel was not recorded for that trial
 
