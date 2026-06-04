@@ -5,12 +5,13 @@ stages:
 variables:
   GIT_DEPTH: 1
 
-# ── macOS arm64 (GitLab-hosted macOS runner) ──────────────────────────────────
+# ── macOS arm64 (GitLab SaaS hosted runner — billed) ─────────────────────────
+# Tag: saas-macos-medium-m1 is GitLab's hosted arm64 macOS runner.
+# Requires billing enabled: gitlab.com → avatar → Billing
 build:macos-arm64:
   stage: build
   tags:
-    - macos
-    - arm64
+    - saas-macos-medium-m1
   script:
     - cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
     - cmake --build build
@@ -26,35 +27,28 @@ build:macos-arm64:
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_COMMIT_TAG
+  allow_failure: true  # remove once billing is enabled
 
-# ── macOS x86_64 ─────────────────────────────────────────────────────────────
+# ── macOS x86_64 (GitLab SaaS hosted runner — billed) ────────────────────────
+# GitLab no longer offers hosted Intel macOS runners (all are arm64 M-series).
+# x86_64 macOS binary must be built locally and committed, or cross-compiled.
+# This job is disabled — kept for documentation.
 build:macos-x86_64:
   stage: build
   tags:
-    - macos
-    - x86_64
+    - saas-macos-medium-m1  # use arm64 runner; binary will be arm64 not x86_64
   script:
-    - cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-    - cmake --build build
-    - mkdir -p bin
-    - cp build/kinarm-binary-converter bin/kinarm-binary-converter-macos-x86_64
-    - chmod +x bin/kinarm-binary-converter-macos-x86_64
-  artifacts:
-    name: "kinarm-binary-converter-macos-x86_64-${CI_COMMIT_SHORT_SHA}"
-    paths:
-      - bin/kinarm-binary-converter-macos-x86_64
-    expire_in: 90 days
+    - echo "Note: GitLab hosted macOS runners are arm64 only. x86_64 binary must be built on Intel hardware."
+    - exit 0
   rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-    - if: $CI_COMMIT_TAG
-  allow_failure: true  # optional until a macOS x86 runner is registered
+    - when: never  # disabled — Intel Mac binary committed manually if needed
 
-# ── Windows x64 (GitLab-hosted Windows runner) ───────────────────────────────
+# ── Windows x64 (GitLab SaaS hosted runner — billed) ─────────────────────────
+# Tag: saas-windows-medium-amd64 is GitLab's hosted Windows runner.
 build:windows-x64:
   stage: build
   tags:
-    - windows
-    - x64
+    - saas-windows-medium-amd64
   script:
     - cmake -S . -B build
     - cmake --build build --config Release
@@ -68,7 +62,7 @@ build:windows-x64:
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_COMMIT_TAG
-  allow_failure: true  # optional until a Windows runner is registered
+  allow_failure: true  # remove once billing is enabled
 
 # ── Linux x86_64 (GitLab shared runner) ──────────────────────────────────────
 build:linux-x86_64:
